@@ -18,6 +18,7 @@ describe('setupCommand skills integration', () => {
     tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'gn-setup-home-'));
     process.env.HOME = tempHome;
     await fs.mkdir(path.join(tempHome, '.cursor'), { recursive: true });
+    await fs.mkdir(path.join(tempHome, '.codex'), { recursive: true });
 
     // Create temporary source skills to verify both supported source layouts:
     // - flat file: skills/{name}.md
@@ -81,5 +82,11 @@ describe('setupCommand skills integration', () => {
       'utf-8',
     );
     expect(nestedInstalled).toContain('Directory Nested File');
+
+    const codexSkillContent = await fs.readFile(
+      path.join(tempHome, '.codex', 'skills', 'gitnexus-cli', 'SKILL.md'),
+      'utf-8',
+    );
+    expect(codexSkillContent).toContain('GitNexus CLI Commands');
   });
 });

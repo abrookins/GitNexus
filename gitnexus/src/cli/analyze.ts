@@ -16,7 +16,7 @@ import { initLbug, loadGraphToLbug, getLbugStats, executeQuery, executeWithReuse
 // disposeEmbedder intentionally not called — ONNX Runtime segfaults on cleanup (see #38)
 import { getStoragePaths, saveMeta, loadMeta, addToGitignore, registerRepo, getGlobalRegistryPath, cleanupOldKuzuFiles } from '../storage/repo-manager.js';
 import { getCurrentCommit, isGitRepo, getGitRoot } from '../storage/git.js';
-import { generateAIContextFiles } from './ai-context.js';
+import { generateAIContextFiles, type ContextDeliveryMode } from './ai-context.js';
 import { generateSkillFiles, type GeneratedSkillInfo } from './skill-gen.js';
 import fs from 'fs/promises';
 
@@ -47,6 +47,7 @@ export interface AnalyzeOptions {
   force?: boolean;
   embeddings?: boolean;
   skills?: boolean;
+  contextDelivery?: ContextDeliveryMode;
   verbose?: boolean;
 }
 
@@ -111,9 +112,37 @@ export const analyzeCommand = async (
 
   const currentCommit = getCurrentCommit(repoPath);
   const existingMeta = await loadMeta(storagePath);
+  const contextDelivery = options?.contextDelivery ?? 'project-files';
+
+  if (!['project-files', 'global-skill', 'both', 'none'].includes(contextDelivery)) {
+    console.log(`  Invalid --context-delivery value: ${contextDelivery}`);
+    console.log('  Expected one of: project-files, global-skill, both, none\n');
+    process.exitCode = 1;
+    return;
+  }
 
   if (existingMeta && !options?.force && !options?.skills && existingMeta.lastCommit === currentCommit) {
-    console.log('  Already up to date\n');
+    if (contextDelivery === 'project-files') {
+      console.log('  Already up to date\n');
+      return;
+    }
+
+    const projectName = path.basename(repoPath);
+    const aiContext = await generateAIContextFiles(repoPath, storagePath, projectName, {
+      files: existingMeta.stats?.files,
+      nodes: existingMeta.stats?.nodes,
+      edges: existingMeta.stats?.edges,
+      communities: existingMeta.stats?.communities,
+      processes: existingMeta.stats?.processes,
+    }, undefined, { delivery: contextDelivery });
+
+    if (aiContext.files.length === 0) {
+      console.log('  Already up to date\n');
+      return;
+    }
+
+    console.log('  Already up to date');
+    console.log(`  Context: ${aiContext.files.join(', ')}\n`);
     return;
   }
 
@@ -344,7 +373,7 @@ export const analyzeCommand = async (
     communities: pipelineResult.communityResult?.stats.totalCommunities,
     clusters: aggregatedClusterCount,
     processes: pipelineResult.processResult?.stats.totalProcesses,
-  }, generatedSkills);
+  }, generatedSkills, { delivery: contextDelivery });
 
   await closeLbug();
   // Note: we intentionally do NOT call disposeEmbedder() here.

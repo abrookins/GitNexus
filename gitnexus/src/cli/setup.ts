@@ -10,8 +10,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { glob } from 'glob';
 import { getGlobalDir } from '../storage/repo-manager.js';
+import { installSkillsTo } from './agent-skills.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -239,84 +239,6 @@ async function setupOpenCode(result: SetupResult): Promise<void> {
   }
 }
 
-// ─── Skill Installation ───────────────────────────────────────────
-
-/**
- * Install GitNexus skills to a target directory.
- * Each skill is installed as {targetDir}/gitnexus-{skillName}/SKILL.md
- * following the Agent Skills standard (both Cursor and Claude Code).
- *
- * Supports two source layouts:
- *   - Flat file:  skills/{name}.md           → copied as SKILL.md
- *   - Directory:  skills/{name}/SKILL.md     → copied recursively (includes references/, etc.)
- */
-async function installSkillsTo(targetDir: string): Promise<string[]> {
-  const installed: string[] = [];
-  const skillsRoot = path.join(__dirname, '..', '..', 'skills');
-
-  let flatFiles: string[] = [];
-  let dirSkillFiles: string[] = [];
-  try {
-    [flatFiles, dirSkillFiles] = await Promise.all([
-      glob('*.md', { cwd: skillsRoot }),
-      glob('*/SKILL.md', { cwd: skillsRoot }),
-    ]);
-  } catch {
-    return [];
-  }
-
-  const skillSources = new Map<string, { isDirectory: boolean }>();
-
-  for (const relPath of dirSkillFiles) {
-    skillSources.set(path.dirname(relPath), { isDirectory: true });
-  }
-  for (const relPath of flatFiles) {
-    const skillName = path.basename(relPath, '.md');
-    if (!skillSources.has(skillName)) {
-      skillSources.set(skillName, { isDirectory: false });
-    }
-  }
-
-  for (const [skillName, source] of skillSources) {
-    const skillDir = path.join(targetDir, skillName);
-
-    try {
-      if (source.isDirectory) {
-        const dirSource = path.join(skillsRoot, skillName);
-        await copyDirRecursive(dirSource, skillDir);
-        installed.push(skillName);
-      } else {
-        const flatSource = path.join(skillsRoot, `${skillName}.md`);
-        const content = await fs.readFile(flatSource, 'utf-8');
-        await fs.mkdir(skillDir, { recursive: true });
-        await fs.writeFile(path.join(skillDir, 'SKILL.md'), content, 'utf-8');
-        installed.push(skillName);
-      }
-    } catch {
-      // Source skill not found — skip
-    }
-  }
-
-  return installed;
-}
-
-/**
- * Recursively copy a directory tree.
- */
-async function copyDirRecursive(src: string, dest: string): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
-}
-
 /**
  * Install global Cursor skills to ~/.cursor/skills/gitnexus/
  */
@@ -353,6 +275,24 @@ async function installOpenCodeSkills(result: SetupResult): Promise<void> {
   }
 }
 
+/**
+ * Install global Codex skills to ~/.codex/skills/
+ */
+async function installCodexSkills(result: SetupResult): Promise<void> {
+  const codexDir = path.join(os.homedir(), '.codex');
+  if (!(await dirExists(codexDir))) return;
+
+  const skillsDir = path.join(codexDir, 'skills');
+  try {
+    const installed = await installSkillsTo(skillsDir);
+    if (installed.length > 0) {
+      result.configured.push(`Codex skills (${installed.length} skills → ~/.codex/skills/)`);
+    }
+  } catch (err: any) {
+    result.errors.push(`Codex skills: ${err.message}`);
+  }
+}
+
 // ─── Main command ──────────────────────────────────────────────────
 
 export const setupCommand = async () => {
@@ -381,6 +321,7 @@ export const setupCommand = async () => {
   await installClaudeCodeHooks(result);
   await installCursorSkills(result);
   await installOpenCodeSkills(result);
+  await installCodexSkills(result);
 
   // Print results
   if (result.configured.length > 0) {

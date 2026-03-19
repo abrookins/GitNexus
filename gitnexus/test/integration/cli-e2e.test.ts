@@ -47,7 +47,7 @@ beforeAll(() => {
 
 afterAll(() => {
   // Clean up .git/ and .gitnexus/ directories created during the test
-  for (const dir of ['.git', '.gitnexus']) {
+  for (const dir of ['.git', '.gitnexus', '.claude', 'AGENTS.md', 'CLAUDE.md']) {
     const fullPath = path.join(MINI_REPO, dir);
     if (fs.existsSync(fullPath)) {
       fs.rmSync(fullPath, { recursive: true, force: true });
@@ -55,20 +55,39 @@ afterAll(() => {
   }
 });
 
-function runCli(command: string, cwd: string, timeoutMs = 15000) {
-  return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, command], {
+function runCliArgs(args: string[], cwd: string, timeoutMs = 15000, envOverrides: Record<string, string> = {}) {
+  return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: timeoutMs,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      ...envOverrides,
       // Pre-set --max-old-space-size so analyzeCommand's ensureHeap() sees it
       // and skips the re-exec. The re-exec drops the tsx loader (--import tsx
       // is not in process.argv), causing ERR_UNKNOWN_FILE_EXTENSION on .ts files.
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim(),
+      NODE_OPTIONS: `${envOverrides.NODE_OPTIONS || process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim(),
     },
   });
+}
+
+function runCliArgsOutsideProject(args: string[], cwd: string, timeoutMs = 15000, envOverrides: Record<string, string> = {}) {
+  return spawnSync(process.execPath, ['--import', tsxImportUrl, cliEntry, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      ...envOverrides,
+      NODE_OPTIONS: `${envOverrides.NODE_OPTIONS || process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim(),
+    },
+  });
+}
+
+function runCli(command: string, cwd: string, timeoutMs = 15000, envOverrides: Record<string, string> = {}) {
+  return runCliArgs([command], cwd, timeoutMs, envOverrides);
 }
 
 /**
@@ -76,16 +95,7 @@ function runCli(command: string, cwd: string, timeoutMs = 15000) {
  * can pass flags (e.g. --help) or omit a command entirely.
  */
 function runCliRaw(extraArgs: string[], cwd: string, timeoutMs = 15000) {
-  return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...extraArgs], {
-    cwd,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim(),
-    },
-  });
+  return runCliArgs(extraArgs, cwd, timeoutMs);
 }
 
 describe('CLI end-to-end', () => {
@@ -117,6 +127,64 @@ describe('CLI end-to-end', () => {
     const gitnexusDir = path.join(MINI_REPO, '.gitnexus');
     expect(fs.existsSync(gitnexusDir)).toBe(true);
     expect(fs.statSync(gitnexusDir).isDirectory()).toBe(true);
+  });
+
+  it('analyze with global-skill mode skips project files and installs central skills', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-global-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-global-repo-'));
+    const repoSkillName = `gitnexus-repo-${path.basename(tempRepo).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+
+    try {
+      for (const entry of fs.readdirSync(MINI_REPO)) {
+        if (['.git', '.gitnexus', '.claude', 'AGENTS.md', 'CLAUDE.md'].includes(entry)) continue;
+        fs.cpSync(path.join(MINI_REPO, entry), path.join(tempRepo, entry), { recursive: true });
+      }
+      fs.mkdirSync(path.join(tempHome, '.claude'), { recursive: true });
+      fs.mkdirSync(path.join(tempHome, '.codex'), { recursive: true });
+
+      spawnSync('git', ['init'], { cwd: tempRepo, stdio: 'pipe' });
+      spawnSync('git', ['add', '-A'], { cwd: tempRepo, stdio: 'pipe' });
+      spawnSync('git', ['commit', '-m', 'initial commit'], {
+        cwd: tempRepo,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: tempHome,
+          GIT_AUTHOR_NAME: 'test',
+          GIT_AUTHOR_EMAIL: 'test@test',
+          GIT_COMMITTER_NAME: 'test',
+          GIT_COMMITTER_EMAIL: 'test@test',
+        },
+      });
+
+      const result = runCliArgsOutsideProject(
+        ['analyze', '--context-delivery', 'global-skill'],
+        tempRepo,
+        30000,
+        { HOME: tempHome },
+      );
+
+      if (result.status === null) return;
+
+      expect(result.status, [
+        `analyze exited with code ${result.status}`,
+        `stdout: ${result.stdout}`,
+        `stderr: ${result.stderr}`,
+      ].join('\n')).toBe(0);
+
+      expect(fs.existsSync(path.join(tempRepo, '.gitnexus'))).toBe(true);
+      expect(fs.existsSync(path.join(tempRepo, 'AGENTS.md'))).toBe(false);
+      expect(fs.existsSync(path.join(tempRepo, 'CLAUDE.md'))).toBe(false);
+      expect(
+        fs.existsSync(path.join(tempHome, '.claude', 'skills', repoSkillName, 'SKILL.md')),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(tempHome, '.codex', 'skills', repoSkillName, 'SKILL.md')),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true });
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   describe('unhappy path', () => {
@@ -166,16 +234,7 @@ describe('CLI end-to-end', () => {
      * resolves even when cwd has no node_modules.
      */
     function runCliOutsideProject(args: string[], cwd: string, timeoutMs = 15000) {
-      return spawnSync(process.execPath, ['--import', tsxImportUrl, cliEntry, ...args], {
-        cwd,
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim(),
-        },
-      });
+      return runCliArgsOutsideProject(args, cwd, timeoutMs);
     }
 
     it('status on non-indexed repo reports not indexed', () => {
