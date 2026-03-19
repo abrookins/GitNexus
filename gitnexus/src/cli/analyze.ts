@@ -121,7 +121,9 @@ export const analyzeCommand = async (
     return;
   }
 
-  if (existingMeta && !options?.force && !options?.skills && existingMeta.lastCommit === currentCommit) {
+  const hasExistingLbug = await fs.access(lbugPath).then(() => true).catch(() => false);
+
+  if (existingMeta && hasExistingLbug && !options?.force && !options?.skills && existingMeta.lastCommit === currentCommit) {
     if (contextDelivery === 'project-files') {
       console.log('  Already up to date\n');
       return;

@@ -8,6 +8,8 @@ const getGitRoot = vi.fn();
 const isGitRepo = vi.fn();
 const getCurrentCommit = vi.fn();
 const getStoragePaths = vi.fn();
+const access = vi.fn();
+const rm = vi.fn();
 
 vi.mock('../../src/core/ingestion/pipeline.js', () => ({
   runPipelineFromRepo,
@@ -48,6 +50,13 @@ vi.mock('../../src/cli/skill-gen.js', () => ({
   generateSkillFiles: vi.fn(),
 }));
 
+vi.mock('fs/promises', () => ({
+  default: {
+    access,
+    rm,
+  },
+}));
+
 describe('analyzeCommand context delivery', () => {
   const originalNodeOptions = process.env.NODE_OPTIONS;
   const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -63,6 +72,8 @@ describe('analyzeCommand context delivery', () => {
     isGitRepo.mockReturnValue(true);
     getCurrentCommit.mockReturnValue('abc123');
     getStoragePaths.mockReturnValue({ storagePath: '/repo/.gitnexus', lbugPath: '/repo/.gitnexus/lbug.db' });
+    access.mockResolvedValue(undefined);
+    rm.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -135,5 +146,22 @@ describe('analyzeCommand context delivery', () => {
 
     expect(runPipelineFromRepo).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith('  Already up to date\n');
+  });
+
+  it('rebuilds when metadata matches but the LadybugDB index is missing', async () => {
+    loadMeta.mockResolvedValue({
+      lastCommit: 'abc123',
+      stats: { files: 4, nodes: 10, edges: 20, communities: 2, processes: 3 },
+    });
+    access.mockRejectedValue(new Error('missing'));
+    runPipelineFromRepo.mockRejectedValue(new Error('pipeline invoked'));
+
+    const { analyzeCommand } = await import('../../src/cli/analyze.js');
+
+    await expect(analyzeCommand(undefined, {})).rejects.toThrow('pipeline invoked');
+
+    expect(runPipelineFromRepo).toHaveBeenCalled();
+    expect(generateAIContextFiles).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalledWith('  Already up to date\n');
   });
 });
