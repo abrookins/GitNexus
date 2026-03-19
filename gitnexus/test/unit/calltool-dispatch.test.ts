@@ -20,6 +20,7 @@ vi.mock('../../src/mcp/core/lbug-adapter.js', () => ({
 
 vi.mock('../../src/storage/repo-manager.js', () => ({
   listRegisteredRepos: vi.fn().mockResolvedValue([]),
+  loadMeta: vi.fn().mockResolvedValue(null),
   cleanupOldKuzuFiles: vi.fn().mockResolvedValue({ found: false, needsReindex: false }),
 }));
 
@@ -34,7 +35,7 @@ vi.mock('../../src/mcp/core/embedder.js', () => ({
 }));
 
 import { LocalBackend } from '../../src/mcp/local/local-backend.js';
-import { listRegisteredRepos, cleanupOldKuzuFiles } from '../../src/storage/repo-manager.js';
+import { listRegisteredRepos, loadMeta, cleanupOldKuzuFiles } from '../../src/storage/repo-manager.js';
 import { initLbug, executeQuery, executeParameterized, isLbugReady, closeLbug } from '../../src/mcp/core/lbug-adapter.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -48,8 +49,16 @@ const MOCK_REPO_ENTRY = {
   stats: { files: 10, nodes: 50, edges: 100, communities: 3, processes: 5 },
 };
 
+const MOCK_REPO_META = {
+  repoPath: MOCK_REPO_ENTRY.path,
+  lastCommit: MOCK_REPO_ENTRY.lastCommit,
+  indexedAt: MOCK_REPO_ENTRY.indexedAt,
+  stats: MOCK_REPO_ENTRY.stats,
+};
+
 function setupSingleRepo() {
   (listRegisteredRepos as any).mockResolvedValue([MOCK_REPO_ENTRY]);
+  (loadMeta as any).mockResolvedValue({ ...MOCK_REPO_META });
 }
 
 function setupMultipleRepos() {
@@ -62,10 +71,12 @@ function setupMultipleRepos() {
       storagePath: '/tmp/.gitnexus/other-project',
     },
   ]);
+  (loadMeta as any).mockResolvedValue({ ...MOCK_REPO_META });
 }
 
 function setupNoRepos() {
   (listRegisteredRepos as any).mockResolvedValue([]);
+  (loadMeta as any).mockResolvedValue(null);
 }
 
 // ─── LocalBackend lifecycle ──────────────────────────────────────────
@@ -419,6 +430,47 @@ describe('ensureInitialized', () => {
     (initLbug as any).mockRejectedValueOnce(new Error('DB locked'));
     await expect(backend.callTool('query', { query: 'test' }))
       .rejects.toThrow('DB locked');
+  });
+
+  it('recycles the repo pool when meta indexedAt changes', async () => {
+    (executeParameterized as any).mockResolvedValue([]);
+
+    await backend.callTool('query', { query: 'test' });
+    expect(initLbug).toHaveBeenCalledTimes(1);
+
+    (loadMeta as any).mockResolvedValueOnce({
+      ...MOCK_REPO_META,
+      indexedAt: '2024-06-02T12:00:00Z',
+    });
+
+    await backend.callTool('query', { query: 'test' });
+
+    expect(closeLbug).toHaveBeenCalledWith('test-project');
+    expect(initLbug).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes cached context stats from newer meta', async () => {
+    (executeParameterized as any).mockResolvedValue([]);
+
+    await backend.callTool('query', { query: 'test' });
+
+    (loadMeta as any).mockResolvedValueOnce({
+      ...MOCK_REPO_META,
+      indexedAt: '2024-06-02T12:00:00Z',
+      stats: { files: 12, nodes: 60, edges: 120, communities: 4, processes: 6 },
+    });
+
+    await backend.callTool('query', { query: 'test' });
+
+    expect(backend.getContext('test-project')).toEqual({
+      projectName: 'test-project',
+      stats: {
+        fileCount: 12,
+        functionCount: 60,
+        communityCount: 4,
+        processCount: 6,
+      },
+    });
   });
 });
 

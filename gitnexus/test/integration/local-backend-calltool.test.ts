@@ -7,12 +7,14 @@
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { LocalBackend } from '../../src/mcp/local/local-backend.js';
-import { listRegisteredRepos } from '../../src/storage/repo-manager.js';
+import { listRegisteredRepos, loadMeta } from '../../src/storage/repo-manager.js';
+import * as poolAdapter from '../../src/mcp/core/lbug-adapter.js';
 import { withTestLbugDB } from '../helpers/test-indexed-db.js';
 import { LOCAL_BACKEND_SEED_DATA, LOCAL_BACKEND_FTS_INDEXES } from '../fixtures/local-backend-seed.js';
 
 vi.mock('../../src/storage/repo-manager.js', () => ({
   listRegisteredRepos: vi.fn().mockResolvedValue([]),
+  loadMeta: vi.fn().mockResolvedValue(null),
   cleanupOldKuzuFiles: vi.fn().mockResolvedValue({ found: false, needsReindex: false }),
 }));
 
@@ -97,6 +99,30 @@ withTestLbugDB('local-backend-calltool', (handle) => {
         (result.process_symbols?.length || 0) +
         (result.definitions?.length || 0);
       expect(totalResults).toBeGreaterThanOrEqual(1);
+    });
+
+    it('reinitializes the stale repo pool when meta indexedAt changes', async () => {
+      const closeSpy = vi.spyOn(poolAdapter, 'closeLbug');
+      const initSpy = vi.spyOn(poolAdapter, 'initLbug');
+      closeSpy.mockClear();
+      initSpy.mockClear();
+
+      await backend.callTool('query', { query: 'login' });
+      closeSpy.mockClear();
+      initSpy.mockClear();
+
+      vi.mocked(loadMeta).mockResolvedValueOnce({
+        repoPath: '/test/repo',
+        lastCommit: 'def456',
+        indexedAt: '2026-03-19T16:00:00.000Z',
+        stats: { files: 2, nodes: 3, communities: 1, processes: 1 },
+      });
+
+      const result = await backend.callTool('query', { query: 'login' });
+
+      expect(result).not.toHaveProperty('error');
+      expect(closeSpy).toHaveBeenCalledWith('test-repo');
+      expect(initSpy).toHaveBeenCalledTimes(1);
     });
 
     it('unknown tool throws', async () => {
@@ -263,6 +289,12 @@ withTestLbugDB('local-backend-calltool', (handle) => {
         stats: { files: 2, nodes: 3, communities: 1, processes: 1 },
       },
     ]);
+    vi.mocked(loadMeta).mockResolvedValue({
+      repoPath: '/test/repo',
+      lastCommit: 'abc123',
+      indexedAt: '2026-03-19T15:00:00.000Z',
+      stats: { files: 2, nodes: 3, communities: 1, processes: 1 },
+    });
 
     const backend = new LocalBackend();
     await backend.init();

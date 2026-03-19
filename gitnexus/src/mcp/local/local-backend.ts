@@ -15,6 +15,7 @@ import { initLbug, executeQuery, executeParameterized, closeLbug, isLbugReady } 
 // import { isGitRepo, getCurrentCommit, getGitRoot } from '../../storage/git.js';
 import {
   listRegisteredRepos,
+  loadMeta,
   cleanupOldKuzuFiles,
   type RegistryEntry,
 } from '../../storage/repo-manager.js';
@@ -89,6 +90,30 @@ export class LocalBackend {
   private contextCache: Map<string, CodebaseContext> = new Map();
   private initializedRepos: Set<string> = new Set();
 
+  private buildContext(name: string, stats?: RegistryEntry['stats']): CodebaseContext {
+    const s = stats || {};
+    return {
+      projectName: name,
+      stats: {
+        fileCount: s.files || 0,
+        functionCount: s.nodes || 0,
+        communityCount: s.communities || 0,
+        processCount: s.processes || 0,
+      },
+    };
+  }
+
+  private applyRepoMeta(handle: RepoHandle, meta: {
+    lastCommit: string;
+    indexedAt: string;
+    stats?: RegistryEntry['stats'];
+  }): void {
+    handle.lastCommit = meta.lastCommit;
+    handle.indexedAt = meta.indexedAt;
+    handle.stats = meta.stats;
+    this.contextCache.set(handle.id, this.buildContext(handle.name, meta.stats));
+  }
+
   // ─── Initialization ──────────────────────────────────────────────
 
   /**
@@ -135,18 +160,7 @@ export class LocalBackend {
       };
 
       this.repos.set(id, handle);
-
-      // Build lightweight context (no LadybugDB needed)
-      const s = entry.stats || {};
-      this.contextCache.set(id, {
-        projectName: entry.name,
-        stats: {
-          fileCount: s.files || 0,
-          functionCount: s.nodes || 0,
-          communityCount: s.communities || 0,
-          processCount: s.processes || 0,
-        },
-      });
+      this.contextCache.set(id, this.buildContext(entry.name, entry.stats));
     }
 
     // Prune repos that no longer exist in the registry
@@ -246,11 +260,24 @@ export class LocalBackend {
   // ─── Lazy LadybugDB Init ────────────────────────────────────────────
 
   private async ensureInitialized(repoId: string): Promise<void> {
-    // Always check the actual pool — the idle timer may have evicted the connection
-    if (this.initializedRepos.has(repoId) && isLbugReady(repoId)) return;
-
     const handle = this.repos.get(repoId);
     if (!handle) throw new Error(`Unknown repo: ${repoId}`);
+
+    const poolReady = this.initializedRepos.has(repoId) && isLbugReady(repoId);
+    const meta = await loadMeta(handle.storagePath);
+    const stale = !!meta?.indexedAt && meta.indexedAt !== handle.indexedAt;
+
+    if (stale && meta) {
+      if (poolReady) {
+        await closeLbug(repoId);
+        this.initializedRepos.delete(repoId);
+      }
+      this.applyRepoMeta(handle, meta);
+    } else if (poolReady) {
+      // Always check the actual pool — the idle timer may have evicted the connection.
+      // If the pool is live and the repo metadata is unchanged, no re-init is needed.
+      return;
+    }
 
     try {
       await initLbug(repoId, handle.lbugPath);
