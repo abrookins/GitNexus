@@ -120,18 +120,31 @@ describe('analyzeCommand context delivery', () => {
     );
   });
 
-  it('keeps the old up-to-date fast path for default project-files delivery', async () => {
+  it('uses global-skill delivery by default when the repo is already up to date', async () => {
     loadMeta.mockResolvedValue({
       lastCommit: 'abc123',
       stats: { files: 4, nodes: 10, edges: 20, communities: 2, processes: 3 },
+    });
+    generateAIContextFiles.mockResolvedValue({
+      files: ['Claude Code repo context skill (~/.claude/skills/gitnexus-repo-repo/)'],
     });
 
     const { analyzeCommand } = await import('../../src/cli/analyze.js');
     await analyzeCommand(undefined, {});
 
     expect(runPipelineFromRepo).not.toHaveBeenCalled();
-    expect(generateAIContextFiles).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith('  Already up to date\n');
+    expect(generateAIContextFiles).toHaveBeenCalledWith(
+      '/repo',
+      '/repo/.gitnexus',
+      'repo',
+      expect.objectContaining({ files: 4, nodes: 10, edges: 20, communities: 2, processes: 3 }),
+      undefined,
+      { delivery: 'global-skill' },
+    );
+    expect(logSpy).toHaveBeenCalledWith('  Already up to date');
+    expect(logSpy).toHaveBeenCalledWith(
+      '  Context: Claude Code repo context skill (~/.claude/skills/gitnexus-repo-repo/)\n',
+    );
   });
 
   it('returns early with no extra context output when the repo is already up to date', async () => {

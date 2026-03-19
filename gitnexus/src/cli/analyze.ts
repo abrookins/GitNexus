@@ -112,7 +112,7 @@ export const analyzeCommand = async (
 
   const currentCommit = getCurrentCommit(repoPath);
   const existingMeta = await loadMeta(storagePath);
-  const contextDelivery = options?.contextDelivery ?? 'project-files';
+  const contextDelivery = options?.contextDelivery ?? 'global-skill';
 
   if (!['project-files', 'global-skill', 'both', 'none'].includes(contextDelivery)) {
     console.log(`  Invalid --context-delivery value: ${contextDelivery}`);

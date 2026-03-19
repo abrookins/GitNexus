@@ -29,8 +29,8 @@ program
   .option('--skills', 'Generate repo-specific skill files from detected communities')
   .option(
     '--context-delivery <mode>',
-    'How to deliver repo instructions: project-files, global-skill, both, or none',
-    'project-files',
+    'How to deliver repo instructions: project-files, global-skill, both, or none (default: global-skill)',
+    'global-skill',
   )
    .option('-v, --verbose', 'Enable verbose ingestion warnings (default: false)')
    .addHelpText('after', '\nEnvironment variables:\n  GITNEXUS_NO_GITIGNORE=1  Skip .gitignore parsing (still reads .gitnexusignore)')

@@ -129,6 +129,64 @@ describe('CLI end-to-end', () => {
     expect(fs.statSync(gitnexusDir).isDirectory()).toBe(true);
   });
 
+  it('analyze defaults to global-skill delivery and skips project files', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-default-global-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-default-global-repo-'));
+    const repoSkillName = `gitnexus-repo-${path.basename(tempRepo).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+
+    try {
+      for (const entry of fs.readdirSync(MINI_REPO)) {
+        if (['.git', '.gitnexus', '.claude', 'AGENTS.md', 'CLAUDE.md'].includes(entry)) continue;
+        fs.cpSync(path.join(MINI_REPO, entry), path.join(tempRepo, entry), { recursive: true });
+      }
+      fs.mkdirSync(path.join(tempHome, '.claude'), { recursive: true });
+      fs.mkdirSync(path.join(tempHome, '.codex'), { recursive: true });
+
+      spawnSync('git', ['init'], { cwd: tempRepo, stdio: 'pipe' });
+      spawnSync('git', ['add', '-A'], { cwd: tempRepo, stdio: 'pipe' });
+      spawnSync('git', ['commit', '-m', 'initial commit'], {
+        cwd: tempRepo,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HOME: tempHome,
+          GIT_AUTHOR_NAME: 'test',
+          GIT_AUTHOR_EMAIL: 'test@test',
+          GIT_COMMITTER_NAME: 'test',
+          GIT_COMMITTER_EMAIL: 'test@test',
+        },
+      });
+
+      const result = runCliArgsOutsideProject(
+        ['analyze'],
+        tempRepo,
+        30000,
+        { HOME: tempHome },
+      );
+
+      if (result.status === null) return;
+
+      expect(result.status, [
+        `analyze exited with code ${result.status}`,
+        `stdout: ${result.stdout}`,
+        `stderr: ${result.stderr}`,
+      ].join('\n')).toBe(0);
+
+      expect(fs.existsSync(path.join(tempRepo, '.gitnexus'))).toBe(true);
+      expect(fs.existsSync(path.join(tempRepo, 'AGENTS.md'))).toBe(false);
+      expect(fs.existsSync(path.join(tempRepo, 'CLAUDE.md'))).toBe(false);
+      expect(
+        fs.existsSync(path.join(tempHome, '.claude', 'skills', repoSkillName, 'SKILL.md')),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(tempHome, '.codex', 'skills', repoSkillName, 'SKILL.md')),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true });
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it('analyze with global-skill mode skips project files and installs central skills', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-global-home-'));
     const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-global-repo-'));
