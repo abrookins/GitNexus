@@ -118,6 +118,14 @@ program
   .option('-r, --repo <name>', 'Target repository')
   .action(createLazyAction(() => import('./tool.js'), 'cypherCommand'));
 
+program
+  .command('detect-changes')
+  .description('Analyze git changes and find affected execution flows')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-s, --scope <scope>', 'What to analyze: unstaged, staged, all, or compare', 'unstaged')
+  .option('-b, --base-ref <ref>', 'Branch or commit for compare scope')
+  .action(createLazyAction(() => import('./tool.js'), 'detectChangesCommand'));
+
 // ─── Eval Server (persistent daemon for SWE-bench) ─────────────────
 
 program

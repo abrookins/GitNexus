@@ -42,4 +42,14 @@ describe('CLI help surface', () => {
     expect(result.stdout).toContain('--include-tests');
     expect(result.stdout).toContain('--repo <name>');
   });
+
+  it('detect-changes help exposes repo and compare options', () => {
+    const result = runHelp('detect-changes');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('detect-changes [options]');
+    expect(result.stdout).toContain('--repo <name>');
+    expect(result.stdout).toContain('--scope <scope>');
+    expect(result.stdout).toContain('--base-ref <ref>');
+  });
 });
